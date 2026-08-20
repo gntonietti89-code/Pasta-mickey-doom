@@ -1,6 +1,13 @@
 import math
 import random
 import tkinter as tk
+from pathlib import Path
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = None
+    ImageTk = None
 
 
 WIDTH = 960
@@ -31,11 +38,11 @@ MAP = [
 
 # Alias satiricos de figuras publicas; los retratos se dibujan geometricamente.
 ENEMY_TYPES = [
-    {"name": "Boric", "color": "#c45d4b", "hair": "#3a2020"},
-    {"name": "Bachelet", "color": "#d98972", "hair": "#6b392b"},
-    {"name": "Pinera", "color": "#b97250", "hair": "#d7d4c5"},
-    {"name": "Allende", "color": "#b46b45", "hair": "#242424"},
-    {"name": "Senador", "color": "#c77d58", "hair": "#3b2822"},
+    {"name": "Boric", "image": "boric.png", "color": "#c45d4b", "hair": "#3a2020"},
+    {"name": "Bachelet", "image": "bachelet.png", "color": "#d98972", "hair": "#6b392b"},
+    {"name": "Pinera", "image": "pinera.png", "color": "#b97250", "hair": "#d7d4c5"},
+    {"name": "Allende", "image": "allende.png", "color": "#b46b45", "hair": "#242424"},
+    {"name": "Senador", "image": "senador.png", "color": "#c77d58", "hair": "#3b2822"},
 ]
 
 
@@ -47,6 +54,8 @@ class DoomPapiMickey:
         self.root.configure(bg="#090b12")
         self.canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="#111522", highlightthickness=0)
         self.canvas.pack()
+        self.enemy_images = self.load_enemy_images()
+        self.frame_image_cache = {}
         self.root.bind("<KeyPress>", self.key_down)
         self.root.bind("<KeyRelease>", self.key_up)
         self.keys = set()
@@ -164,6 +173,7 @@ class DoomPapiMickey:
 
     def render(self):
         self.canvas.delete("all")
+        self.frame_image_cache.clear()
         offset = random.randint(-self.shake, self.shake) if self.shake else 0
         self.canvas.create_rectangle(0, 0, WIDTH, HALF_HEIGHT + offset, fill="#161d34", outline="")
         self.canvas.create_rectangle(0, HALF_HEIGHT + offset, WIDTH, HEIGHT, fill="#251c22", outline="")
@@ -226,7 +236,35 @@ class DoomPapiMickey:
         rgb = [int(color[index:index + 2], 16) for index in (0, 2, 4)]
         return "#" + "".join(f"{max(0, min(255, int(value * factor))):02x}" for value in rgb)
 
+    def load_enemy_images(self):
+        images = {}
+        if Image is None or ImageTk is None:
+            return images
+
+        asset_directory = Path(__file__).with_name("assets") / "enemies"
+        for profile in ENEMY_TYPES:
+            image_path = asset_directory / profile["image"]
+            try:
+                with Image.open(image_path) as source:
+                    images[profile["name"]] = source.convert("RGBA").copy()
+            except (FileNotFoundError, OSError):
+                pass
+        return images
+
     def draw_enemy(self, x, center_y, size, profile):
+        image = self.enemy_images.get(profile["name"])
+        if image is not None and ImageTk is not None:
+            image_size = max(1, int(size))
+            cache_key = (profile["name"], image_size)
+            resized = self.frame_image_cache.get(cache_key)
+            if resized is None:
+                resized_image = image.resize((image_size, image_size), Image.Resampling.LANCZOS)
+                resized = ImageTk.PhotoImage(resized_image)
+                self.frame_image_cache[cache_key] = resized
+            self.canvas.create_image(x, center_y - size * 0.08, image=resized, anchor="center")
+            self.canvas.create_text(x, center_y + size * 0.52, text=profile["name"], fill="#f5d6a1", font=("Courier New", max(8, int(size / 13)), "bold"))
+            return
+
         left = x - size * 0.32
         right = x + size * 0.32
         top = center_y - size * 0.55
