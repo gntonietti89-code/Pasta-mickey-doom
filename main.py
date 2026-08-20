@@ -18,6 +18,7 @@ RAYS = 160
 COLUMN_WIDTH = WIDTH / RAYS
 MOVE_SPEED = 2.7
 TURN_SPEED = 0.055
+LEVEL_START_ENEMIES = 2
 
 WALL_COLORS = {"1": "#682f2f", "2": "#3f4f72", "3": "#735a31"}
 MAP = [
@@ -45,6 +46,13 @@ ENEMY_TYPES = [
     {"name": "Senador", "image": "senador.png", "color": "#c77d58", "hair": "#3b2822"},
 ]
 
+WEAPONS = {
+    "Pistola": {"cooldown": 10, "damage": 100, "spread": 0.08, "color": "#b9c0ca"},
+    "Escopeta": {"cooldown": 24, "damage": 150, "spread": 0.18, "color": "#d98f4d"},
+    "Rafaga": {"cooldown": 5, "damage": 55, "spread": 0.11, "color": "#6cc4a1"},
+}
+WEAPON_ORDER = list(WEAPONS)
+
 
 class DoomPapiMickey:
     def __init__(self, root):
@@ -67,17 +75,46 @@ class DoomPapiMickey:
         self.player = [2.0, 2.0, 0.0]
         self.health = 100
         self.score = 0
+        self.level = 1
+        self.weapon_inventory = ["Pistola"]
+        self.weapon_index = 0
+        self.weapon_cooldown = 0
         self.paused = False
         self.game_over = False
         self.won = False
         self.flash = 0
         self.shake = 0
         self.enemies = []
-        spawn_points = [(6.5, 2.0), (12.5, 2.5), (4.5, 5.5), (11.5, 8.5), (13.0, 10.5)]
-        for point, profile in zip(spawn_points, ENEMY_TYPES):
-            self.enemies.append({"x": point[0], "y": point[1], "profile": profile, "alive": True, "cooldown": 0})
+        self.weapon_pickups = []
+        self.spawn_level()
         self.keys.clear()
         self.render()
+
+    def spawn_level(self):
+        self.player[0], self.player[1] = 2.0, 2.0
+        open_cells = [
+            (x + 0.5, y + 0.5)
+            for y, row in enumerate(MAP)
+            for x, tile in enumerate(row)
+            if tile == "." and math.hypot(x + 0.5 - self.player[0], y + 0.5 - self.player[1]) > 3
+        ]
+        random.shuffle(open_cells)
+        enemy_count = LEVEL_START_ENEMIES * (2 ** (self.level - 1))
+        for index in range(enemy_count):
+            point = open_cells[index % len(open_cells)]
+            profile = ENEMY_TYPES[index % len(ENEMY_TYPES)]
+            self.enemies.append({
+                "x": point[0],
+                "y": point[1],
+                "profile": profile,
+                "alive": True,
+                "cooldown": 0,
+                "speed": 0.018 + self.level * 0.003,
+            })
+
+        pickup_count = min(len(WEAPON_ORDER) - 1, 1 + self.level // 2)
+        for weapon_name, point in zip(WEAPON_ORDER[1:], open_cells[enemy_count:enemy_count + pickup_count]):
+            self.weapon_pickups.append({"x": point[0], "y": point[1], "name": weapon_name, "collected": False})
 
     def key_down(self, event):
         key = event.keysym.lower()
@@ -87,6 +124,8 @@ class DoomPapiMickey:
             self.paused = not self.paused
         elif key == "space" and not self.paused and not self.game_over and not self.won:
             self.shoot()
+        elif key in ("q", "e") and not self.paused and not self.game_over and not self.won:
+            self.switch_weapon(-1 if key == "q" else 1)
         else:
             self.keys.add(key)
 
@@ -111,6 +150,7 @@ class DoomPapiMickey:
             self.player[1] = y
 
     def update(self):
+        self.weapon_cooldown = max(0, self.weapon_cooldown - 1)
         if "left" in self.keys:
             self.player[2] -= TURN_SPEED
         if "right" in self.keys:
@@ -128,9 +168,18 @@ class DoomPapiMickey:
                 continue
             enemy["cooldown"] = max(0, enemy["cooldown"] - 1)
             distance = math.hypot(enemy["x"] - self.player[0], enemy["y"] - self.player[1])
+            if distance > 0.8:
+                direction_x = (self.player[0] - enemy["x"]) / distance
+                direction_y = (self.player[1] - enemy["y"]) / distance
+                next_x = enemy["x"] + direction_x * enemy["speed"]
+                next_y = enemy["y"] + direction_y * enemy["speed"]
+                if not self.is_wall(next_x, enemy["y"]):
+                    enemy["x"] = next_x
+                if not self.is_wall(enemy["x"], next_y):
+                    enemy["y"] = next_y
             if distance < 0.85 and enemy["cooldown"] == 0:
-                self.health -= 8
-                enemy["cooldown"] = 35
+                self.health -= 6 + self.level * 2
+                enemy["cooldown"] = max(14, 35 - self.level * 2)
                 self.shake = 5
                 if self.health <= 0:
                     self.game_over = True
@@ -139,13 +188,27 @@ class DoomPapiMickey:
             self.flash -= 1
         if self.shake:
             self.shake -= 1
+        for pickup in self.weapon_pickups:
+            if not pickup["collected"] and math.hypot(pickup["x"] - self.player[0], pickup["y"] - self.player[1]) < 0.65:
+                pickup["collected"] = True
+                if pickup["name"] not in self.weapon_inventory:
+                    self.weapon_inventory.append(pickup["name"])
+                self.weapon_index = self.weapon_inventory.index(pickup["name"])
         if all(not enemy["alive"] for enemy in self.enemies):
-            self.won = True
+            self.level += 1
+            self.health = min(100, self.health + 25)
+            self.enemies = []
+            self.weapon_pickups = []
+            self.spawn_level()
 
     def shoot(self):
+        if self.weapon_cooldown:
+            return
+        weapon_name = self.weapon_inventory[self.weapon_index]
+        weapon = WEAPONS[weapon_name]
+        self.weapon_cooldown = weapon["cooldown"]
         self.flash = 3
-        best = None
-        best_distance = 999
+        targets = []
         for enemy in self.enemies:
             if not enemy["alive"]:
                 continue
@@ -153,12 +216,20 @@ class DoomPapiMickey:
             dy = enemy["y"] - self.player[1]
             distance = math.hypot(dx, dy)
             relative = math.atan2(math.sin(math.atan2(dy, dx) - self.player[2]), math.cos(math.atan2(dy, dx) - self.player[2]))
-            if abs(relative) < 0.10 and distance < best_distance and not self.wall_between(enemy["x"], enemy["y"]):
-                best = enemy
-                best_distance = distance
-        if best:
-            best["alive"] = False
-            self.score += 100
+            if abs(relative) < weapon["spread"] and not self.wall_between(enemy["x"], enemy["y"]):
+                targets.append((distance, enemy))
+        targets.sort(key=lambda target: target[0])
+        max_targets = 3 if weapon_name == "Escopeta" else 1
+        for _, enemy in targets[:max_targets]:
+            enemy["health"] = enemy.get("health", 100) - weapon["damage"]
+            if enemy["health"] <= 0:
+                enemy["alive"] = False
+                self.score += 100
+
+    def switch_weapon(self, direction):
+        if len(self.weapon_inventory) < 2:
+            return
+        self.weapon_index = (self.weapon_index + direction) % len(self.weapon_inventory)
 
     def wall_between(self, target_x, target_y):
         distance = math.hypot(target_x - self.player[0], target_y - self.player[1])
@@ -193,6 +264,7 @@ class DoomPapiMickey:
             self.canvas.create_rectangle(x1, HALF_HEIGHT - wall_height / 2 + offset, x2, HALF_HEIGHT + wall_height / 2 + offset, fill=color, outline="")
             z_buffer.append(corrected)
 
+        self.draw_pickups(offset)
         visible_enemies = []
         for enemy in self.enemies:
             if enemy["alive"]:
@@ -278,20 +350,50 @@ class DoomPapiMickey:
         self.canvas.create_arc(x - size * 0.1, top + size * 0.38, x + size * 0.1, top + size * 0.5, start=180, extent=180, outline="#241317", width=2)
         self.canvas.create_text(x, bottom + 12, text=profile["name"], fill="#f5d6a1", font=("Courier New", max(8, int(size / 13)), "bold"))
 
+    def draw_pickups(self, offset):
+        visible_pickups = []
+        for pickup in self.weapon_pickups:
+            if pickup["collected"]:
+                continue
+            dx = pickup["x"] - self.player[0]
+            dy = pickup["y"] - self.player[1]
+            distance = math.hypot(dx, dy)
+            relative = math.atan2(math.sin(math.atan2(dy, dx) - self.player[2]), math.cos(math.atan2(dy, dx) - self.player[2]))
+            if abs(relative) < FOV * 0.7 and not self.wall_between(pickup["x"], pickup["y"]):
+                visible_pickups.append((distance, relative, pickup))
+        for distance, relative, pickup in sorted(visible_pickups, reverse=True):
+            screen_x = WIDTH / 2 + math.tan(relative) / math.tan(FOV / 2) * WIDTH / 2
+            size = min(100, HEIGHT / max(0.25, distance) * 0.18)
+            center_y = HALF_HEIGHT + offset + size * 0.4
+            color = WEAPONS[pickup["name"]]["color"]
+            self.canvas.create_rectangle(screen_x - size * 0.35, center_y - size * 0.2, screen_x + size * 0.35, center_y + size * 0.2, fill=color, outline="#11131a", width=2)
+            self.canvas.create_line(screen_x - size * 0.2, center_y - size * 0.2, screen_x + size * 0.2, center_y + size * 0.2, fill="#11131a", width=max(2, int(size / 10)))
+            self.canvas.create_text(screen_x, center_y + size * 0.4, text=pickup["name"], fill="#f5d6a1", font=("Courier New", max(8, int(size / 9)), "bold"))
+
     def draw_weapon(self, offset):
         center = WIDTH // 2
-        self.canvas.create_polygon(center - 55, HEIGHT, center - 40, HEIGHT - 120 + offset, center + 40, HEIGHT - 120 + offset, center + 55, HEIGHT, fill="#30343c", outline="#090a0d", width=3)
+        weapon_name = self.weapon_inventory[self.weapon_index]
+        weapon_color = WEAPONS[weapon_name]["color"]
+        barrel_width = 65 if weapon_name == "Escopeta" else 40
+        self.canvas.create_polygon(center - barrel_width, HEIGHT, center - barrel_width * 0.7, HEIGHT - 120 + offset, center + barrel_width * 0.7, HEIGHT - 120 + offset, center + barrel_width, HEIGHT, fill="#30343c", outline="#090a0d", width=3)
         self.canvas.create_rectangle(center - 25, HEIGHT - 160 + offset, center + 25, HEIGHT - 100 + offset, fill="#aa6b3c", outline="#090a0d", width=3)
+        self.canvas.create_rectangle(center - 30, HEIGHT - 190 + offset, center + 30, HEIGHT - 175 + offset, fill=weapon_color, outline="#090a0d", width=2)
         if self.flash:
             self.canvas.create_polygon(center - 16, HEIGHT - 180 + offset, center, HEIGHT - 245 + offset, center + 16, HEIGHT - 180 + offset, fill="#f7d34e", outline="#fff2a3")
 
     def draw_hud(self):
         self.canvas.create_rectangle(0, 0, WIDTH, 46, fill="#090b12", outline="")
         alive = sum(enemy["alive"] for enemy in self.enemies)
+        weapon_name = self.weapon_inventory[self.weapon_index]
+        inventory = " | ".join(
+            f"[{name}]" if index == self.weapon_index else name
+            for index, name in enumerate(self.weapon_inventory)
+        )
         self.canvas.create_text(18, 23, anchor="w", text="PAPI MICKEY", fill="#f2c66d", font=("Courier New", 16, "bold"))
-        self.canvas.create_text(WIDTH - 18, 16, anchor="e", text=f"VIDA {max(0, self.health)}   PUNTOS {self.score}", fill="#f5f1dc", font=("Courier New", 11, "bold"))
-        self.canvas.create_text(WIDTH - 18, 33, anchor="e", text=f"OBJETIVOS: {alive}", fill="#cc8f8f", font=("Courier New", 9, "bold"))
-        self.canvas.create_text(18, HEIGHT - 16, anchor="w", text="WASD MOVER  FLECHAS GIRAR  ESPACIO DISPARAR  P PAUSA  R REINICIAR", fill="#e3c99c", font=("Courier New", 9, "bold"))
+        self.canvas.create_text(WIDTH - 18, 13, anchor="e", text=f"NIVEL {self.level}   VIDA {max(0, self.health)}   PUNTOS {self.score}", fill="#f5f1dc", font=("Courier New", 10, "bold"))
+        self.canvas.create_text(WIDTH - 18, 30, anchor="e", text=f"OBJETIVOS: {alive}   ARMA: {weapon_name}", fill="#cc8f8f", font=("Courier New", 9, "bold"))
+        self.canvas.create_text(18, HEIGHT - 28, anchor="w", text=f"ARMAS {inventory}", fill="#b9d7c2", font=("Courier New", 9, "bold"))
+        self.canvas.create_text(18, HEIGHT - 12, anchor="w", text="WASD MOVER  FLECHAS GIRAR  ESPACIO DISPARAR  Q/E CAMBIAR  P PAUSA  R REINICIAR", fill="#e3c99c", font=("Courier New", 8, "bold"))
 
     def message(self, title, subtitle):
         self.canvas.create_rectangle(230, 230, WIDTH - 230, 370, fill="#090b12", outline="#c58c54", width=3)

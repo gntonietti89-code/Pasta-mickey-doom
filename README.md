@@ -31,7 +31,12 @@ py -3 main.py
 - `A` / `D`: desplazamiento lateral
 - Flechas izquierda/derecha: girar
 - `Espacio`: lanzar un disparo arcade
+- `Q` / `E`: cambiar entre armas encontradas
 - `P`: pausar
 - `R`: reiniciar
 
 Tkinter suele venir incluido con Python para Windows; Pillow se instala con `requirements.txt`.
+
+## Progresion
+
+Cada nivel duplica la cantidad de enemigos: 2, 4, 8, etc. Los enemigos persiguen al jugador y se vuelven mas agresivos con cada nivel. Las armas aparecen dentro de los pasillos; acercate a una para recogerla y alterna el inventario con `Q` y `E`.
